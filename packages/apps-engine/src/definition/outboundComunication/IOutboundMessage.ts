@@ -48,4 +48,5 @@ export type TemplateParameter =
 	| {
 			type: 'media';
 			link: string;
+			format: 'image' | 'document' | 'video';
 	  };

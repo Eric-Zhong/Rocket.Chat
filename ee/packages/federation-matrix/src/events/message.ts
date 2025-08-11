@@ -5,19 +5,22 @@ import type { IUser } from '@rocket.chat/core-typings';
 import type { Emitter } from '@rocket.chat/emitter';
 import { Logger } from '@rocket.chat/logger';
 import { Users, MatrixBridgedUser, MatrixBridgedRoom, Rooms, Subscriptions, Messages } from '@rocket.chat/models';
+import { MatrixMediaService } from '../services/MatrixMediaService';
 
 const logger = new Logger('federation-matrix:message');
 
 export function message(emitter: Emitter<HomeserverEventSignatures>) {
 	emitter.on('homeserver.matrix.message', async (data) => {
 		try {
-			const message = data.content?.body?.toString();
-			if (!message) {
-				logger.debug('No message found in event content');
+			const content = data.content as any;
+			const msgtype = content?.msgtype;
+			const messageBody = content?.body?.toString();
+			if (!messageBody && !msgtype) {
+				logger.debug('No message content found in event');
 				return;
 			}
 
-			const content = data.content as any;
+			const isMediaMessage = ['m.image', 'm.file', 'm.video', 'm.audio'].includes(msgtype);
 			const threadRelation = content?.['m.relates_to'];
 			const isThreadMessage = threadRelation?.rel_type === 'm.thread';
 			const threadRootEventId = isThreadMessage ? threadRelation.event_id : undefined;
@@ -118,13 +121,111 @@ export function message(emitter: Emitter<HomeserverEventSignatures>) {
 				}
 			}
 
-			await Message.saveMessageFromFederation({
-				fromId: user._id,
-				rid: internalRoomId,
-				msg: message,
-				federation_event_id: data.event_id,
-				tmid,
-			});
+			if (isMediaMessage && content?.url) {
+				const fileInfo = content.info || {};
+				const mimeType =
+					fileInfo.mimetype ||
+					(msgtype === 'm.image'
+						? 'image/jpeg'
+						: msgtype === 'm.video'
+							? 'video/mp4'
+							: msgtype === 'm.audio'
+								? 'audio/mpeg'
+								: 'application/octet-stream');
+
+				let fileRefId: string;
+				try {
+					fileRefId = await MatrixMediaService.createRemoteFileReference(
+						content.url, // MXC URI
+						{
+							name: messageBody || 'unnamed',
+							size: fileInfo.size || 0,
+							type: mimeType,
+							roomId: internalRoomId,
+							userId: user._id,
+						},
+					);
+				} catch (fileRefError: any) {
+					throw fileRefError;
+				}
+
+				const fileName = messageBody || 'unnamed';
+				const fileExtension = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : mimeType.split('/')[1] || '';
+
+				const fileUrl = `/file-upload/${fileRefId}/${encodeURIComponent(fileName)}`;
+				const attachment: any = {
+					title: fileName,
+					type: 'file',
+					title_link: fileUrl,
+					title_link_download: true,
+				};
+
+				if (msgtype === 'm.image') {
+					attachment.image_url = fileUrl;
+					attachment.image_type = mimeType;
+					attachment.image_size = fileInfo.size || 0;
+					attachment.description = ''; // Empty description like normal uploads
+					if (fileInfo.w && fileInfo.h) {
+						attachment.image_dimensions = {
+							width: fileInfo.w,
+							height: fileInfo.h,
+						};
+					}
+				} else if (msgtype === 'm.video') {
+					attachment.video_url = fileUrl;
+					attachment.video_type = mimeType;
+					attachment.video_size = fileInfo.size || 0;
+					attachment.description = '';
+				} else if (msgtype === 'm.audio') {
+					attachment.audio_url = fileUrl;
+					attachment.audio_type = mimeType;
+					attachment.audio_size = fileInfo.size || 0;
+					attachment.description = '';
+				} else {
+					// Generic file
+					attachment.description = '';
+				}
+
+				const fileData = {
+					_id: fileRefId,
+					name: fileName,
+					type: mimeType,
+					size: fileInfo.size || 0,
+					format: fileExtension,
+				};
+
+				const room = await Rooms.findOneById(internalRoomId);
+				if (!room) {
+					logger.error('Room not found for media message:', { roomId: internalRoomId });
+					return;
+				}
+
+				const messageData = {
+					rid: internalRoomId,
+					msg: '',
+					file: fileData,
+					files: [fileData],
+					attachments: [attachment],
+					federation: {
+						eventId: data.event_id,
+					},
+					tmid,
+				};
+
+				try {
+					await Message.sendMessageWithValidation(user, messageData, room);
+				} catch (sendMessageError: any) {
+					throw sendMessageError;
+				}
+			} else {
+				await Message.saveMessageFromFederation({
+					fromId: user._id,
+					rid: internalRoomId,
+					msg: messageBody || '',
+					federation_event_id: data.event_id,
+					tmid,
+				});
+			}
 		} catch (error) {
 			logger.error('Error processing Matrix message:', error);
 		}

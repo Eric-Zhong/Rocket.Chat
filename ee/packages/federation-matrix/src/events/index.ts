@@ -2,6 +2,7 @@ import type { HomeserverEventSignatures } from '@hs/federation-sdk';
 import type { Emitter } from '@rocket.chat/emitter';
 
 import { edus } from './edu';
+import { file } from './file';
 import { invite } from './invite';
 import { member } from './member';
 import { message } from './message';
@@ -15,4 +16,5 @@ export function registerEvents(emitter: Emitter<HomeserverEventSignatures>) {
 	reaction(emitter);
 	member(emitter);
 	edus(emitter);
+	file(emitter);
 }

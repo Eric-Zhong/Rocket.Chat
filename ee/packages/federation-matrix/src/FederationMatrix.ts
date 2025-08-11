@@ -4,11 +4,18 @@ import type { PresenceState } from '@hs/core';
 import { ConfigService, createFederationContainer, getAllServices } from '@hs/federation-sdk';
 import type { HomeserverEventSignatures, HomeserverServices, FederationContainerOptions } from '@hs/federation-sdk';
 import { type IFederationMatrixService, Room, ServiceClass, Settings } from '@rocket.chat/core-services';
-import { isDeletedMessage, isMessageFromMatrixFederation, UserStatus, type IMessage, type IRoom, type IUser } from '@rocket.chat/core-typings';
+import {
+	isDeletedMessage,
+	isMessageFromMatrixFederation,
+	UserStatus,
+	type IMessage,
+	type IRoom,
+	type IUser,
+} from '@rocket.chat/core-typings';
 import { Emitter } from '@rocket.chat/emitter';
 import { Router } from '@rocket.chat/http-router';
 import { Logger } from '@rocket.chat/logger';
-import { MatrixBridgedUser, MatrixBridgedRoom, Users, Subscriptions, Messages, Rooms } from '@rocket.chat/models';
+import { MatrixBridgedUser, MatrixBridgedRoom, Users, Subscriptions, Messages, Rooms, Uploads } from '@rocket.chat/models';
 import emojione from 'emojione';
 
 import { getWellKnownRoutes } from './api/.well-known/server';
@@ -19,7 +26,9 @@ import { getMatrixRoomsRoutes } from './api/_matrix/rooms';
 import { getMatrixSendJoinRoutes } from './api/_matrix/send-join';
 import { getMatrixTransactionsRoutes } from './api/_matrix/transactions';
 import { getFederationVersionsRoutes } from './api/_matrix/versions';
+import { getMatrixMediaRoutes } from './api/_matrix/media';
 import { registerEvents } from './events';
+import { MatrixMediaService } from './services/MatrixMediaService';
 
 export class FederationMatrix extends ServiceClass implements IFederationMatrixService {
 	protected name = 'federation-matrix';
@@ -112,7 +121,7 @@ export class FederationMatrix extends ServiceClass implements IFederationMatrixS
 							presence: statusMap[user.status] || 'offline',
 						},
 					],
-					roomsUserIsMemberOf.map(({ externalRoomId }) => externalRoomId),
+					roomsUserIsMemberOf.map(({ externalRoomId }: { externalRoomId: string }) => externalRoomId),
 				);
 			},
 		);
@@ -131,7 +140,8 @@ export class FederationMatrix extends ServiceClass implements IFederationMatrixS
 			.use(getMatrixSendJoinRoutes(this.homeserverServices))
 			.use(getMatrixTransactionsRoutes(this.homeserverServices))
 			.use(getKeyServerRoutes(this.homeserverServices))
-			.use(getFederationVersionsRoutes(this.homeserverServices));
+			.use(getFederationVersionsRoutes(this.homeserverServices))
+			.use(getMatrixMediaRoutes(this.homeserverServices));
 
 		wellKnown.use(getWellKnownRoutes(this.homeserverServices));
 
@@ -239,8 +249,52 @@ export class FederationMatrix extends ServiceClass implements IFederationMatrixS
 
 			let result;
 
-			if (!message.tmid) {
-				result = await this.homeserverServices.message.sendMessage(matrixRoomId, message.msg, actualMatrixUserId);
+			if (message.file?._id || message.attachments?.length) {
+				const fileId = message.file?._id || (message.attachments?.[0] as any)?.file?._id;
+				if (fileId) {
+					const mxcUri = await MatrixMediaService.prepareLocalFileForMatrix(fileId, matrixDomain);
+
+					const file = await Uploads.findOneById(fileId);
+					if (file) {
+						let msgtype: 'm.image' | 'm.file' | 'm.video' | 'm.audio' = 'm.file';
+						if (file.type?.startsWith('image/')) {
+							msgtype = 'm.image';
+						} else if (file.type?.startsWith('video/')) {
+							msgtype = 'm.video';
+						} else if (file.type?.startsWith('audio/')) {
+							msgtype = 'm.audio';
+						}
+
+						const fileContent = {
+							body: file.name || 'Unnamed file',
+							msgtype,
+							url: mxcUri,
+							info: {
+								size: file.size,
+								mimetype: file.type || 'application/octet-stream',
+							} as any,
+						};
+
+						if (msgtype === 'm.image' && (file as any).identify) {
+							const identify = (file as any).identify;
+							if (identify.size) {
+								fileContent.info.w = identify.size.width;
+								fileContent.info.h = identify.size.height;
+							}
+						}
+
+						result = await this.homeserverServices.message.sendFileMessage(matrixRoomId, fileContent, actualMatrixUserId);
+					} else {
+						const messageContent = message.msg || '';
+						result = await this.homeserverServices.message.sendMessage(matrixRoomId, messageContent, actualMatrixUserId);
+					}
+				} else {
+					const messageContent = message.msg || '';
+					result = await this.homeserverServices.message.sendMessage(matrixRoomId, messageContent, actualMatrixUserId);
+				}
+			} else if (!message.tmid) {
+				const messageContent = message.msg || '';
+				result = await this.homeserverServices.message.sendMessage(matrixRoomId, messageContent, actualMatrixUserId);
 			} else {
 				const threadRootMessage = await Messages.findOneById(message.tmid);
 				const threadRootEventId = threadRootMessage?.federation?.eventId;
@@ -256,16 +310,18 @@ export class FederationMatrix extends ServiceClass implements IFederationMatrixS
 					);
 					const latestThreadEventId = latestThreadMessage?.federation?.eventId;
 
+					const threadMessageContent = message.msg || '';
 					result = await this.homeserverServices.message.sendThreadMessage(
 						matrixRoomId,
-						message.msg,
+						threadMessageContent,
 						actualMatrixUserId,
 						threadRootEventId,
 						latestThreadEventId,
 					);
 				} else {
 					this.logger.warn('Thread root event ID not found, sending as regular message');
-					result = await this.homeserverServices.message.sendMessage(matrixRoomId, message.msg, actualMatrixUserId);
+					const threadMessageContent = message.msg || '';
+					result = await this.homeserverServices.message.sendMessage(matrixRoomId, threadMessageContent, actualMatrixUserId);
 				}
 			}
 
@@ -553,6 +609,173 @@ export class FederationMatrix extends ServiceClass implements IFederationMatrixS
 		} catch (error) {
 			this.logger.error('Failed to kick user from Matrix room:', error);
 			throw error;
+		}
+	}
+
+	/**
+	 * Stream a remote Matrix file for display in RC
+	 * This doesn't store the file, just proxies it
+	 */
+	async streamRemoteFile(userId: string, mxcUri: string): Promise<Buffer | null> {
+		try {
+			if (!this.homeserverServices) {
+				this.logger.warn('Homeserver services not available, cannot stream file');
+				return null;
+			}
+
+			const mxcParts = MatrixMediaService.parseMXCUri(mxcUri);
+			if (!mxcParts) {
+				this.logger.error('Invalid MXC URI format', { mxcUri });
+				return null;
+			}
+
+			this.homeserverServices.mediaBridge.downloadFile(userId, mxcParts.mediaId, mxcParts.serverName);
+			return null;
+		} catch (error) {
+			this.logger.error('Failed to stream remote file:', error);
+			return null;
+		}
+	}
+
+	/**
+	 * Serve a local RC file to Matrix nodes
+	 */
+	async serveLocalFileToMatrix(mxcUri: string): Promise<Buffer | null> {
+		try {
+			const file = await MatrixMediaService.getLocalFileForMatrixNode(mxcUri);
+			if (!file) {
+				this.logger.warn('Local file not found for MXC URI', { mxcUri });
+				return null;
+			}
+
+			const buffer = await MatrixMediaService.getLocalFileBuffer(file._id);
+			if (!buffer) {
+				this.logger.error('Failed to get file buffer', { fileId: file._id });
+				return null;
+			}
+
+			return buffer;
+		} catch (error) {
+			this.logger.error('Failed to serve local file:', error);
+			return null;
+		}
+	}
+
+	/**
+	 * Get file metadata
+	 */
+	async getFileMetadata(fileId: string): Promise<any | null> {
+		try {
+			const file = await Uploads.findOneById(fileId);
+			if (!file) {
+				this.logger.warn('No file found', { fileId });
+				return null;
+			}
+
+			return {
+				fileName: file.name,
+				fileSize: file.size,
+				mimeType: file.type,
+				uploadedAt: file.uploadedAt,
+				isRemote: (file as any).federation?.isRemote || false,
+				mxcUri: (file as any).federation?.mxcUri,
+			};
+		} catch (error) {
+			this.logger.error('Failed to get file metadata:', error);
+			return null;
+		}
+	}
+
+	/**
+	 * Download and stream a remote Matrix file to the client
+	 * This method handles proxying remote Matrix files to Rocket.Chat clients
+	 */
+	async downloadRemoteFile(file: any, _req: any, res: any): Promise<void> {
+		try {
+			const mxcUri = file.federation?.mxcUri;
+			const serverName = file.federation?.serverName;
+			const mediaId = file.federation?.mediaId;
+
+			if (!mxcUri || !serverName || !mediaId) {
+				this.logger.error('Missing federation metadata for remote file');
+				res.writeHead(404);
+				res.end('Remote file metadata missing');
+				return;
+			}
+
+			if (file.type?.startsWith('image/')) {
+				res.writeHead(302, {
+					Location: '/images/logo/logo.svg',
+				});
+				res.end();
+				return;
+			}
+
+			const fetch = (await import('node-fetch')).default;
+			const remoteUrl = `https://${serverName}/_matrix/media/v3/download/${serverName}/${mediaId}`;
+
+			this.logger.debug('Fetching remote Matrix file from:', remoteUrl);
+
+			try {
+				const response = await fetch(remoteUrl, {
+					method: 'GET',
+					headers: {
+						'User-Agent': 'RocketChat-Federation/1.0',
+					},
+					timeout: 10000,
+					// @ts-ignore
+					agent: new (await import('https')).Agent({
+						rejectUnauthorized: false,
+					}),
+				});
+
+				if (!response.ok) {
+					this.logger.error('Failed to fetch remote file:', response.status, response.statusText);
+					res.writeHead(response.status);
+					res.end(`Failed to fetch remote file: ${response.statusText}`);
+					return;
+				}
+
+				// Set appropriate headers
+				const contentType = response.headers.get('content-type') || file.type || 'application/octet-stream';
+				const contentLength = response.headers.get('content-length');
+
+				res.setHeader('Content-Type', contentType);
+				if (contentLength) {
+					res.setHeader('Content-Length', contentLength);
+				}
+				res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.name || '')}"`);
+				res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 1 day
+
+				// Stream the response directly to the client
+				response.body?.pipe(res);
+			} catch (fetchError) {
+				this.logger.error('Error fetching remote file:', fetchError);
+				if (file.type?.startsWith('image/')) {
+					res.writeHead(302, {
+						Location: '/images/logo/logo.svg',
+					});
+					res.end();
+				} else {
+					res.writeHead(500);
+					res.end('Error fetching remote file');
+				}
+			}
+		} catch (error) {
+			this.logger.error('Error handling remote Matrix file download:', error);
+			res.writeHead(500);
+			res.end('Internal server error');
+		}
+	}
+
+	/**
+	 * Clean up expired remote file references
+	 */
+	async cleanupExpiredFiles(): Promise<void> {
+		try {
+			await MatrixMediaService.cleanupOrphanedReferences();
+		} catch (error) {
+			this.logger.error('Error during file cleanup:', error);
 		}
 	}
 }

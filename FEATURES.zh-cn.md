@@ -1,0 +1,66 @@
+# 功能特性
+
+- 自托管
+  - Docker
+  - 多种部署选项（Heroku、Digital Ocean、Sandstorm等）
+- 身份认证选项
+  - OAuth（Open Authorization，开放授权）
+  - SAML（Security Assertion Markup Language，安全断言标记语言）
+  - LDAP（Lightweight Directory Access Protocol，轻量目录访问协议）
+  - CAS（Central Authentication Service，中央认证服务）(1.0, 2.0 + 属性同步)
+  - Facebook、Github、Google等
+- I18N（Internationalization，国际化）：目前支持30多种语言
+- 文件上传
+  - 拖放上传
+  - 上传到文件系统
+  - AWS（Amazon Web Services，亚马逊网络服务） + CDN（Content Delivery Network，内容分发网络）
+- 在线聊天
+  - SMS（Short Message Service，短消息服务）集成
+- 富媒体
+  - 音频通话
+  - 视频会议
+  - 屏幕共享
+- 通知系统
+  - 桌面和移动通知
+  - 使用您自己的网关
+  - 使用@all通知房间中的每个人（可配置最大用户数）
+  - 通过电子邮件接收错过的消息
+- 应用程序
+  - 移动应用
+  - 原生应用
+- 集成功能
+  - Hubot
+  - 入站/出站Webhooks
+  - 数据导入器
+    - 从Slack导入
+  - Slack桥接器
+- 个人资料
+  - 自定义头像
+- 文本装饰
+  - @提及
+  - 链接预览
+  - 嵌入视频
+  - Markdown
+  - 代码，单行或多行
+  - TexMath
+  - 表情符号
+    - 反应表情
+- 消息编辑
+  - 使用箭头键选择要编辑的消息，编辑就这么简单
+  - 设置保留编辑历史或丢弃先前的文本
+  - 显示或隐藏已编辑/已删除状态
+- 历史记录
+  - 搜索
+    - 全文搜索
+    - 正则表达式搜索
+- 为房间添加星标并标记为收藏
+- 为消息添加星标和置顶
+  - 为对您重要的消息添加星标。只有您可以访问自己的星标。
+  - 置顶对每个人都重要的消息。
+  - 通过侧边栏按钮快速访问您的星标/置顶消息和提及您的消息
+- REST API（Representational State Transfer Application Programming Interface，表述性状态转移应用程序编程接口）
+- 角色和权限
+- 公共和私有多用户房间
+- 一对一对话
+  - 非记录消息（消息已加密并临时保存在数据库中）
+- 斜杠命令

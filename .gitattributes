@@ -1,0 +1,11 @@
+# 设置所有文件使用LF行尾符号
+* text=auto eol=auto
+
+# 二进制文件类型设置
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.jar binary
+*.exe binary

@@ -59,3 +59,6 @@ registration.yaml
 
 storybook-static
 development/tempo-data/
+
+
+apps/meteor/packages/rocketchat-i18n/i18n

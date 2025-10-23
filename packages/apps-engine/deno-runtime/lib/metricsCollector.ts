@@ -1,4 +1,6 @@
-import { writeAll } from 'https://deno.land/std@0.216.0/io/write_all.ts';
+// FIXED: 因为 build 时无法下载，只能把代码拿过来了。
+// import { writeAll } from 'https://deno.land/std@0.216.0/io/write_all.ts';
+import { writeAll } from './write_all.ts';
 import { Queue } from './messenger.ts';
 
 export function collectMetrics() {

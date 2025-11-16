@@ -1,40 +1,55 @@
+# Rocket.Chat CI环境Docker Compose配置文件
+# 此文件定义了用于持续集成测试的多容器应用环境
+# 包含主应用、微服务、消息代理和负载均衡器
+
+# 使用Docker Compose文件格式3.8版本
 version: '3.8'
 
 services:
+  # 主Rocket.Chat应用服务
   rocketchat:
+    # 卷挂载：将主机的测试覆盖率报告目录映射到容器内
     volumes:
       - /tmp/coverage:/tmp/coverage
+    # 指定平台为Linux/AMD64，确保跨平台构建一致性
     platform: linux/amd64
+    # 构建配置
     build:
-      dockerfile: ${RC_DOCKERFILE}
-      context: /tmp/build
+      dockerfile: ${RC_DOCKERFILE}  # 动态指定Dockerfile路径
+      context: /tmp/build  # 构建上下文路径
       args:
-        DENO_VERSION: ${DENO_VERSION}
+        DENO_VERSION: ${DENO_VERSION}  # 传递Deno版本参数
+    # 镜像名称配置
     image: ghcr.io/${LOWERCASE_REPOSITORY}/rocket.chat:${RC_DOCKER_TAG}
+    # 环境变量配置
     environment:
-      - TEST_MODE=true
-      - DEBUG=${DEBUG}
-      - EXIT_UNHANDLEDPROMISEREJECTION=true
-      - 'MONGO_URL=${MONGO_URL}'
-      - 'MONGO_OPLOG_URL=${MONGO_OPLOG_URL}'
-      - 'TRANSPORTER=${TRANSPORTER}'
-      - MOLECULER_LOG_LEVEL=info
-      - 'ROCKETCHAT_LICENSE=${ENTERPRISE_LICENSE}'
-      - 'COVERAGE_DIR=${COVERAGE_DIR}'
-      - 'COVERAGE_REPORTER=${COVERAGE_REPORTER}'
-      - DISABLE_DB_WATCHERS=${DISABLE_DB_WATCHERS}
-      - OVERWRITE_SETTING_Log_Level=${DEBUG_LOG_LEVEL:-0}
+      - TEST_MODE=true  # 启用测试模式
+      - DEBUG=${DEBUG}  # 调试级别配置
+      - EXIT_UNHANDLEDPROMISEREJECTION=true  # 未处理Promise拒绝时退出进程
+      - 'MONGO_URL=${MONGO_URL}'  # MongoDB连接URL
+      - 'MONGO_OPLOG_URL=${MONGO_OPLOG_URL}'  # MongoDB操作日志URL
+      - 'TRANSPORTER=${TRANSPORTER}'  # 服务间通信传输器配置
+      - MOLECULER_LOG_LEVEL=info  # Moleculer微服务框架日志级别
+      - 'ROCKETCHAT_LICENSE=${ENTERPRISE_LICENSE}'  # 企业版许可证
+      - 'COVERAGE_DIR=${COVERAGE_DIR}'  # 覆盖率报告目录
+      - 'COVERAGE_REPORTER=${COVERAGE_REPORTER}'  # 覆盖率报告格式
+      - DISABLE_DB_WATCHERS=${DISABLE_DB_WATCHERS}  # 是否禁用数据库监视器
+      - OVERWRITE_SETTING_Log_Level=${DEBUG_LOG_LEVEL:-0}  # 日志级别覆盖设置
+    # 额外主机配置，允许容器访问宿主机服务
     extra_hosts:
       - 'host.docker.internal:host-gateway'
+    # 依赖关系：服务启动顺序
     depends_on:
-      - traefik
+      - traefik  # 依赖traefik负载均衡器
+    # Traefik路由标签配置
     labels:
-      traefik.enable: true
-      traefik.http.services.rocketchat.loadbalancer.server.port: 3000
-      traefik.http.routers.rocketchat.service: rocketchat
-      traefik.http.routers.rocketchat.rule: PathPrefix(`/`)
-      traefik.http.middlewares.test-retry.retry.attempts: 4
+      traefik.enable: true  # 启用Traefik自动发现
+      traefik.http.services.rocketchat.loadbalancer.server.port: 3000  # 负载均衡端口
+      traefik.http.routers.rocketchat.service: rocketchat  # 路由服务关联
+      traefik.http.routers.rocketchat.rule: PathPrefix(`/`)  # 路由规则：根路径
+      traefik.http.middlewares.test-retry.retry.attempts: 4  # 重试中间件配置
 
+  # 授权服务微服务
   authorization-service:
     platform: linux/amd64
     build:
@@ -51,8 +66,9 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
+      - nats  # 依赖NATS消息代理
 
+  # 账户服务微服务
   account-service:
     platform: linux/amd64
     build:
@@ -68,8 +84,9 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
+      - nats  # 依赖NATS消息代理
 
+  # 在线状态服务微服务
   presence-service:
     platform: linux/amd64
     build:
@@ -86,8 +103,9 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
+      - nats  # 依赖NATS消息代理
 
+  # DDP流服务微服务 - 处理WebSocket连接
   ddp-streamer-service:
     platform: linux/amd64
     build:
@@ -103,14 +121,16 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
-      - traefik
+      - nats  # 依赖NATS消息代理
+      - traefik  # 依赖Traefik负载均衡
+    # Traefik路由配置 - 处理WebSocket连接
     labels:
       traefik.enable: true
       traefik.http.services.ddp-streamer-service.loadbalancer.server.port: 3000
       traefik.http.routers.ddp-streamer-service.service: ddp-streamer-service
       traefik.http.routers.ddp-streamer-service.rule: PathPrefix(`/websocket`) || PathPrefix(`/sockjs`)
 
+  # 流中心服务微服务
   stream-hub-service:
     platform: linux/amd64
     build:
@@ -127,8 +147,9 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
+      - nats  # 依赖NATS消息代理
 
+  # 队列工作服务微服务
   queue-worker-service:
     platform: linux/amd64
     build:
@@ -144,8 +165,9 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
+      - nats  # 依赖NATS消息代理
 
+  # 全渠道对话记录服务微服务
   omnichannel-transcript-service:
     platform: linux/amd64
     build:
@@ -162,17 +184,19 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     depends_on:
-      - nats
+      - nats  # 依赖NATS消息代理
 
+  # NATS消息代理服务 - 微服务间通信的核心组件
   nats:
-    image: nats:2.6-alpine
+    image: nats:2.6-alpine  # 使用Alpine轻量级镜像
 
+  # Traefik反向代理和负载均衡服务
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.1  # 使用Traefik 3.1版本
     command:
-      - --providers.docker=true
-      - '--serverstransport.maxidleconnsperhost=-1'
+      - --providers.docker=true  # 启用Docker服务发现
+      - '--serverstransport.maxidleconnsperhost=-1'  # 禁用每个主机的最大空闲连接限制
     ports:
-      - 3000:80
+      - 3000:80  # 将容器80端口映射到主机3000端口
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock  # 挂载Docker套接字以实现自动服务发现
